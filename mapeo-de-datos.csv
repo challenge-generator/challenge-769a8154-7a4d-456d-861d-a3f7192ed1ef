@@ -1,0 +1,90 @@
+"Campo Origen","Tipo Origen","Obligatoriedad Origen","Campo Destino","Tipo Destino","Obligatoriedad Destino","Regla de Transformación","Ejemplo"
+"id_solicitud","string","O","loan_application_id","string","O","Mantener valor","SOL-2023-001 -> SOL-2023-001"
+"id_cliente","string","O","customer_id","string","O","Mantener valor","CLI-45678 -> CLI-45678"
+"nombre_cliente","string","O","customer_name","string","O","Primera letra mayúscula","""juan perez"" -> ""Juan Perez"""
+"apellido_cliente","string","O","customer_lastname","string","O","Primera letra mayúscula","""gomez"" -> ""Gomez"""
+"fecha_nacimiento","date","O","birth_date","date","O","Formato: DD/MM/YYYY -> YYYY-MM-DD","15/06/1985 -> 1985-06-15"
+"tipo_documento","string","O","id_type","string","O","Mapeo: CI->CC, PAS->PP","CI -> CC"
+"numero_documento","string","O","id_number","string","O","Eliminar espacios y guiones","""12.345.678-9"" -> ""123456789"""
+"monto_solicitado","number","O","requested_amount","number","O","Dividir por 100 (centavos a unidades)","25000000 -> 250000.00"
+"plazo_meses","integer","O","loan_term_months","integer","O","Mantener valor","360 -> 360"
+"ingresos_mensuales","number","O","monthly_income","number","O","Dividir por 100","800000 -> 8000.00"
+"valor_propiedad","number","O","property_value","number","O","Dividir por 100","30000000 -> 300000.00"
+"direccion_propiedad","string","O","property_address","string","O","Formato: Calle Nro, Ciudad, País","""Av. Libertador 1234, Buenos Aires, Argentina"" -> ""Av. Libertador 1234, Buenos Aires, Argentina"""
+"riesgo_fraude","integer","N","fraud_risk_score","integer","N","Mantener valor (0-100)","5 -> 5"
+"scoring_riesgo","integer","N","credit_score","integer","N","Mantener valor (300-850)","720 -> 720"
+"estado_solicitud","string","O","loan_status","string","O","Mapeo: APROBADO->APPROVED, RECHAZADO->REJECTED","APROBADO -> APPROVED"
+"tasa_interes","number","N","interest_rate","number","N","Dividir por 100 y convertir a porcentaje","850 -> 8.50"
+"fecha_aprobacion","date","N","approval_date","date","N","Formato: DD/MM/YYYY -> YYYY-MM-DD","10/11/2023 -> 2023-11-10"
+"id_prestamo","string","N","loan_id","string","N","Mantener valor","PRE-2023-001 -> PRE-2023-001"
+
+## Notas sobre el Mapeo
+1. **Obligatoriedad**:
+   - "O": Campo obligatorio. Si falta, la solicitud se rechaza.
+   - "N": Campo opcional. Puede omitirse sin afectar el proceso.
+
+2. **Transformaciones Comunes**:
+   - **Monetarios**: Los valores monetarios en el sistema origen suelen venir en centavos (ej. 25000000 = $250,000.00). Se dividen por 100 para convertirlos a unidades.
+   - **Fechas**: El formato `DD/MM/YYYY` se convierte a `YYYY-MM-DD` para cumplir con ISO 8601.
+   - **Documentos**: Se normalizan eliminando caracteres especiales (espacios, guiones, puntos).
+
+3. **Campos Calculados**:
+   - `loan_to_value`: Se calcula como `(requested_amount / property_value) * 100`.
+   - `debt_to_income`: Se calcula como `(monthly_income / requested_amount_monthly_payment) * 100`.
+
+4. **Validaciones Adicionales**:
+   - `requested_amount` debe ser menor o igual al 80% de `property_value`.
+   - `monthly_income` debe ser al menos 3 veces el pago mensual estimado del préstamo.
+
+5. **Integración con Servicios Externos**:
+   - **Buró de Riesgos**: Recibe `customer_id` y `id_type` + `id_number` para consultar el scoring.
+   - **Motor Antifraude**: Recibe `customer_id`, `documentos` (PDFs/imágenes) y `property_address` para evaluar fraude.
+
+## Ejemplo de Transformación Completa
+**Origen (JSON)**:
+```json
+{
+  "id_solicitud": "SOL-2023-001",
+  "id_cliente": "CLI-45678",
+  "nombre_cliente": "juan perez",
+  "apellido_cliente": "gomez",
+  "fecha_nacimiento": "15/06/1985",
+  "tipo_documento": "CI",
+  "numero_documento": "12.345.678-9",
+  "monto_solicitado": 25000000,
+  "plazo_meses": 360,
+  "ingresos_mensuales": 800000,
+  "valor_propiedad": 30000000,
+  "direccion_propiedad": "Av. Libertador 1234, Buenos Aires, Argentina",
+  "riesgo_fraude": 5,
+  "scoring_riesgo": 720,
+  "estado_solicitud": "APROBADO",
+  "tasa_interes": 850
+}
+```
+
+**Destino (JSON)**:
+```json
+{
+  "loan_application_id": "SOL-2023-001",
+  "customer_id": "CLI-45678",
+  "customer_name": "Juan Perez",
+  "customer_lastname": "Gomez",
+  "birth_date": "1985-06-15",
+  "id_type": "CC",
+  "id_number": "123456789",
+  "requested_amount": 250000.00,
+  "loan_term_months": 360,
+  "monthly_income": 8000.00,
+  "property_value": 300000.00,
+  "property_address": "Av. Libertador 1234, Buenos Aires, Argentina",
+  "fraud_risk_score": 5,
+  "credit_score": 720,
+  "loan_status": "APPROVED",
+  "interest_rate": 8.50,
+  "loan_to_value": 83.33,
+  "debt_to_income": 35.00
+}
+```
+
+---

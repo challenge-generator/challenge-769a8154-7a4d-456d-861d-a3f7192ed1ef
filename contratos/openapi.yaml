@@ -1,0 +1,431 @@
+openapi: 3.1.0
+info:
+  title: API de Gestión de Préstamos Hipotecarios - SOA
+  description: |
+    Contrato OpenAPI 3.1 para la integración SOA entre el originador de créditos, motor antifraude, buró de riesgos y core bancario.
+    Incluye extensiones para eventos (EDA) y transacciones distribuidas (patrón Saga).
+  version: 1.0.0
+  contact:
+    name: Equipo de Integración SOA
+    email: integracion@banco.com
+  license:
+    name: Privado
+servers:
+  - url: https://api.banco.com/soa/v1
+    description: Servidor de producción
+  - url: https://sandbox.api.banco.com/soa/v1
+    description: Entorno de pruebas
+paths:
+  /prestamos:
+    post:
+      summary: Solicitar un nuevo préstamo hipotecario
+      description: |
+        Endpoint para iniciar el proceso de solicitud de préstamo hipotecario.
+        Inicia una transacción distribuida gestionada mediante el patrón Saga.
+      operationId: solicitarPrestamo
+      tags:
+        - Préstamos
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SolicitudPrestamo"
+            examples:
+              solicitudEjemplo:
+                value:
+                  clienteId: "CLI-123456"
+                  monto: 250000.00
+                  plazoMeses: 360
+                  tipoPropiedad: "RESIDENCIAL"
+                  ingresosMensuales: 8000.00
+                  scoreCrediticio: 750
+      responses:
+        "201":
+          description: Solicitud de préstamo creada con éxito
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RespuestaSolicitud"
+              examples:
+                respuestaEjemplo:
+                  value:
+                    solicitudId: "SOL-987654"
+                    estado: "EN_PROCESO"
+                    mensaje: "Solicitud recibida. Procesando validaciones."
+        "400":
+          description: Error de validación en la solicitud
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorValidacion"
+              examples:
+                errorEjemplo:
+                  value:
+                    codigo: "VALIDACION-001"
+                    mensaje: "El monto del préstamo excede el límite permitido para el score crediticio proporcionado."
+                    detalles:
+                      - campo: "monto"
+                        mensaje: "Debe ser menor o igual a 200000.00"
+        "500":
+          description: Error interno del servidor
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorGenerico"
+      callbacks:
+        onEstadoActualizado:
+          "{$request.body#/callbackUrl}":
+            post:
+              summary: Notificación de actualización de estado (EDA)
+              description: |
+                Callback para notificar cambios de estado en el proceso de solicitud.
+                Utilizado para implementar patrones de Event-Driven Architecture (EDA).
+              operationId: notificarEstado
+              requestBody:
+                required: true
+                content:
+                  application/json:
+                    schema:
+                      $ref: "#/components/schemas/EventoEstado"
+                    examples:
+                      eventoEjemplo:
+                        value:
+                          solicitudId: "SOL-987654"
+                          estado: "APROBADO_ANTIFRAUDE"
+                          timestamp: "2023-11-15T14:30:00Z"
+                          detalles:
+                            resultadoAntifraude: "SIN_RIESGO"
+              responses:
+                "200":
+                  description: Notificación recibida correctamente
+  /prestamos/{solicitudId}:
+    get:
+      summary: Consultar estado de una solicitud de préstamo
+      description: |
+        Obtiene el estado actual de una solicitud de préstamo en proceso.
+      operationId: consultarEstadoSolicitud
+      tags:
+        - Préstamos
+      parameters:
+        - name: solicitudId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+            example: "SOL-987654"
+      responses:
+        "200":
+          description: Estado de la solicitud recuperado con éxito
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EstadoSolicitud"
+              examples:
+                estadoEjemplo:
+                  value:
+                    solicitudId: "SOL-987654"
+                    estado: "EN_PROCESO_RIESGO"
+                    pasosCompletados:
+                      - "VALIDACION_INICIAL"
+                      - "ANTIFRAUDE"
+                    proximoPaso: "APROBACION_RIESGO"
+        "404":
+          description: Solicitud no encontrada
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorGenerico"
+              examples:
+                errorEjemplo:
+                  value:
+                    codigo: "RECURSO-001"
+                    mensaje: "Solicitud con ID SOL-987654 no encontrada."
+  /eventos:
+    post:
+      summary: Publicar evento en el bus de eventos (EDA)
+      description: |
+        Endpoint para publicar eventos en el bus de eventos.
+        Utilizado para implementar coreografía en la arquitectura SOA.
+      operationId: publicarEvento
+      tags:
+        - Eventos
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/Evento"
+            examples:
+              eventoAntifraude:
+                value:
+                  tipoEvento: "ANTIFRAUDE_COMPLETADO"
+                  solicitudId: "SOL-987654"
+                  payload:
+                    resultado: "SIN_RIESGO"
+                    detalles: "Validación de identidad y comportamiento completada sin alertas."
+                  timestamp: "2023-11-15T14:30:00Z"
+      responses:
+        "202":
+          description: Evento aceptado para procesamiento
+        "400":
+          description: Error en la estructura del evento
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorValidacion"
+    get:
+      summary: Suscribirse a eventos (EDA)
+      description: |
+        Endpoint para suscribirse a eventos mediante Server-Sent Events (SSE).
+        Utilizado para implementar patrones de Event-Driven Architecture (EDA).
+      operationId: suscribirseEventos
+      tags:
+        - Eventos
+      parameters:
+        - name: tiposEvento
+          in: query
+          required: false
+          schema:
+            type: array
+            items:
+              type: string
+              enum:
+                - "ANTIFRAUDE_COMPLETADO"
+                - "RIESGO_EVALUADO"
+                - "SOLICITUD_APROBADA"
+                - "SOLICITUD_RECHAZADA"
+          style: form
+          explode: false
+      responses:
+        "200":
+          description: Stream de eventos (SSE)
+          content:
+            text/event-stream:
+              schema:
+                type: string
+                format: binary
+              examples:
+                eventoStream:
+                  value: |
+                    data: {"tipoEvento": "ANTIFRAUDE_COMPLETADO", "solicitudId": "SOL-987654", "payload": {"resultado": "SIN_RIESGO"}, "timestamp": "2023-11-15T14:30:00Z"}
+
+                    
+                    data: {"tipoEvento": "RIESGO_EVALUADO", "solicitudId": "SOL-987654", "payload": {"score": 750, "aprobado": true}, "timestamp": "2023-11-15T14:35:00Z"}
+
+components:
+  schemas:
+    SolicitudPrestamo:
+      type: object
+      required:
+        - clienteId
+        - monto
+        - plazoMeses
+        - tipoPropiedad
+        - ingresosMensuales
+      properties:
+        clienteId:
+          type: string
+          description: Identificador único del cliente
+          example: "CLI-123456"
+        monto:
+          type: number
+          format: double
+          description: Monto solicitado para el préstamo
+          example: 250000.00
+        plazoMeses:
+          type: integer
+          description: Plazo del préstamo en meses
+          example: 360
+        tipoPropiedad:
+          type: string
+          enum:
+            - RESIDENCIAL
+            - COMERCIAL
+            - INDUSTRIAL
+          description: Tipo de propiedad a financiar
+          example: "RESIDENCIAL"
+        ingresosMensuales:
+          type: number
+          format: double
+          description: Ingresos mensuales del cliente
+          example: 8000.00
+        scoreCrediticio:
+          type: integer
+          description: Score crediticio del cliente (opcional)
+          example: 750
+        callbackUrl:
+          type: string
+          format: uri
+          description: URL para notificaciones de callback (EDA)
+          example: "https://cliente.com/notificaciones"
+    RespuestaSolicitud:
+      type: object
+      properties:
+        solicitudId:
+          type: string
+          description: Identificador único de la solicitud
+          example: "SOL-987654"
+        estado:
+          type: string
+          enum:
+            - EN_PROCESO
+            - APROBADO
+            - RECHAZADO
+            - ERROR
+          description: Estado actual de la solicitud
+          example: "EN_PROCESO"
+        mensaje:
+          type: string
+          description: Mensaje descriptivo del estado
+          example: "Solicitud recibida. Procesando validaciones."
+    EstadoSolicitud:
+      type: object
+      properties:
+        solicitudId:
+          type: string
+          description: Identificador único de la solicitud
+          example: "SOL-987654"
+        estado:
+          type: string
+          enum:
+            - EN_PROCESO
+            - APROBADO_ANTIFRAUDE
+            - EN_PROCESO_RIESGO
+            - APROBADO_RIESGO
+            - APROBADO
+            - RECHAZADO
+            - ERROR
+          description: Estado actual de la solicitud
+          example: "EN_PROCESO_RIESGO"
+        pasosCompletados:
+          type: array
+          items:
+            type: string
+            enum:
+              - VALIDACION_INICIAL
+              - ANTIFRAUDE
+              - RIESGO
+              - APROBACION_FINAL
+          description: Pasos del proceso completados
+          example:
+            - "VALIDACION_INICIAL"
+            - "ANTIFRAUDE"
+        proximoPaso:
+          type: string
+          enum:
+            - ANTIFRAUDE
+            - RIESGO
+            - APROBACION_FINAL
+            - NINGUNO
+          description: Próximo paso en el proceso
+          example: "APROBACION_RIESGO"
+        detalles:
+          type: object
+          additionalProperties: true
+          description: Detalles adicionales del estado
+          example:
+            resultadoAntifraude: "SIN_RIESGO"
+            scoreRiesgo: 750
+    ErrorValidacion:
+      type: object
+      properties:
+        codigo:
+          type: string
+          description: Código de error
+          example: "VALIDACION-001"
+        mensaje:
+          type: string
+          description: Mensaje descriptivo del error
+          example: "El monto del préstamo excede el límite permitido para el score crediticio proporcionado."
+        detalles:
+          type: array
+          items:
+            type: object
+            properties:
+              campo:
+                type: string
+                description: Nombre del campo con error
+                example: "monto"
+              mensaje:
+                type: string
+                description: Mensaje de error específico
+                example: "Debe ser menor o igual a 200000.00"
+    ErrorGenerico:
+      type: object
+      properties:
+        codigo:
+          type: string
+          description: Código de error
+          example: "INTERNO-001"
+        mensaje:
+          type: string
+          description: Mensaje descriptivo del error
+          example: "Error interno del servidor. Intente más tarde."
+    Evento:
+      type: object
+      required:
+        - tipoEvento
+        - solicitudId
+        - payload
+        - timestamp
+      properties:
+        tipoEvento:
+          type: string
+          enum:
+            - ANTIFRAUDE_COMPLETADO
+            - RIESGO_EVALUADO
+            - SOLICITUD_APROBADA
+            - SOLICITUD_RECHAZADA
+            - TRANSACCION_DISTRIBUIDA_INICIADA
+            - TRANSACCION_DISTRIBUIDA_COMPENSADA
+          description: Tipo de evento
+          example: "ANTIFRAUDE_COMPLETADO"
+        solicitudId:
+          type: string
+          description: Identificador único de la solicitud asociada
+          example: "SOL-987654"
+        payload:
+          type: object
+          additionalProperties: true
+          description: Datos específicos del evento
+          example:
+            resultado: "SIN_RIESGO"
+            detalles: "Validación de identidad y comportamiento completada sin alertas."
+        timestamp:
+          type: string
+          format: date-time
+          description: Marca de tiempo del evento
+          example: "2023-11-15T14:30:00Z"
+    EventoEstado:
+      type: object
+      properties:
+        solicitudId:
+          type: string
+          description: Identificador único de la solicitud
+          example: "SOL-987654"
+        estado:
+          type: string
+          enum:
+            - APROBADO_ANTIFRAUDE
+            - RECHAZADO_ANTIFRAUDE
+            - APROBADO_RIESGO
+            - RECHAZADO_RIESGO
+            - APROBADO
+            - RECHAZADO
+            - ERROR
+          description: Nuevo estado de la solicitud
+          example: "APROBADO_ANTIFRAUDE"
+        timestamp:
+          type: string
+          format: date-time
+          description: Marca de tiempo del evento
+          example: "2023-11-15T14:30:00Z"
+        detalles:
+          type: object
+          additionalProperties: true
+          description: Detalles adicionales del evento
+          example:
+            resultadoAntifraude: "SIN_RIESGO"
+            metodoValidacion: "IDENTIDAD_Y_COMPORTAMIENTO"
